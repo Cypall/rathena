@@ -29,7 +29,7 @@ using namespace rathena;
 std::unordered_map<uint16, std::shared_ptr<struct s_storage_table>> storage_db;
 
 ///Databases of guild_storage : int32 guild_id -> struct guild_storage
-std::map<int, struct s_storage> guild_storage_db;
+std::map<int32, struct s_storage> guild_storage_db;
 
 /**
  * Get storage name
@@ -138,7 +138,7 @@ int32 storage_storageopen(map_session_data *sd)
 		return 1; //Already open?
 
 	if( !pc_can_give_items(sd) ) { // check is this GM level is allowed to put items to storage
-		clif_displaymessage(sd->fd, msg_txt(sd,246));
+		clif_displaymessage( sd->fd, msg_txt( sd, 246 ) ); // Your GM level doesn't authorize you to perform this action.
 		return 1;
 	}
 
@@ -364,7 +364,7 @@ void storage_storageadd(map_session_data* sd, struct s_storage *stor, int32 inde
  * @param amount : number of item to take
  * @return 0:fail, 1:success
  */
-void storage_storageget(map_session_data *sd, struct s_storage *stor, int32 index, int32 amount)
+void storage_storageget(map_session_data *sd, struct s_storage *stor, int32 index, int32 amount, bool favorite)
 {
 	unsigned char flag = 0;
 	enum e_storage_add result;
@@ -375,7 +375,7 @@ void storage_storageget(map_session_data *sd, struct s_storage *stor, int32 inde
 	if (result != STORAGE_ADD_OK)
 		return;
 
-	if ((flag = pc_additem(sd,&stor->u.items_storage[index],amount,LOG_TYPE_STORAGE)) == ADDITEM_SUCCESS)
+	if ((flag = pc_additem(sd,&stor->u.items_storage[index],amount,LOG_TYPE_STORAGE, favorite)) == ADDITEM_SUCCESS)
 		storage_delitem(sd,stor,index,amount);
 	else {
 		clif_storageitemremoved( *sd, index, 0 );
@@ -563,8 +563,12 @@ char storage_guild_storageopen(map_session_data* sd)
 		return GSTORAGE_NO_GUILD;
 
 #ifdef OFFICIAL_GUILD_STORAGE
-	if (!guild_checkskill(sd->guild->guild, GD_GUILD_STORAGE))
+	uint16 level = guild_checkskill(sd->guild->guild, GD_GUILD_STORAGE);
+
+	if (level == 0)
 		return GSTORAGE_NO_STORAGE; // Can't open storage if the guild has not learned the skill
+
+	uint16 max = 100 + level * 100; // Lv1..5 => 200..600
 #endif
 
 	if (sd->state.storage_flag == 2)
@@ -580,13 +584,13 @@ char storage_guild_storageopen(map_session_data* sd)
 #endif
 
 	if( !pc_can_give_items(sd) ) { //check is this GM level can open guild storage and store items [Lupus]
-		clif_displaymessage(sd->fd, msg_txt(sd,246));
+		clif_displaymessage( sd->fd, msg_txt( sd, 246 ) ); // Your GM level doesn't authorize you to perform this action.
 		return GSTORAGE_ALREADY_OPEN;
 	}
 
 	if((gstor = guild2storage2(sd->status.guild_id)) == nullptr
 #ifdef OFFICIAL_GUILD_STORAGE
-		|| (gstor->max_amount != guild_checkskill(sd->guild->guild, GD_GUILD_STORAGE) * 100)
+		|| (gstor->max_amount != max)
 #endif
 	) {
 		intif_request_guild_storage(sd->status.account_id,sd->status.guild_id);
@@ -610,7 +614,7 @@ char storage_guild_storageopen(map_session_data* sd)
 
 void storage_guild_log( map_session_data* sd, struct item* item, int16 amount ){
 	int32 i;
-	SqlStmt* stmt = SqlStmt_Malloc(mmysql_handle);
+	SqlStmt stmt{ *mmysql_handle };
 	StringBuf buf;
 	StringBuf_Init(&buf);
 
@@ -631,11 +635,8 @@ void storage_guild_log( map_session_data* sd, struct item* item, int16 amount ){
 		StringBuf_Printf(&buf, ",'%d','%d','%d'", item->option[i].id, item->option[i].value, item->option[i].param);
 	StringBuf_Printf(&buf, ")");
 
-	if (SQL_SUCCESS != SqlStmt_PrepareStr(stmt, StringBuf_Value(&buf)) || SQL_SUCCESS != SqlStmt_Execute(stmt))
+	if (SQL_SUCCESS != stmt.PrepareStr(StringBuf_Value(&buf)) || SQL_SUCCESS != stmt.Execute())
 		SqlStmt_ShowDebug(stmt);
-
-	SqlStmt_Free(stmt);
-	StringBuf_Destroy(&buf);
 }
 
 enum e_guild_storage_log storage_guild_log_read_sub( map_session_data* sd, std::vector<struct guild_log_entry>& log, uint32 max ){
@@ -656,13 +657,11 @@ enum e_guild_storage_log storage_guild_log_read_sub( map_session_data* sd, std::
 	StringBuf_Printf(&buf, " FROM `%s` WHERE `guild_id`='%u'", guild_storage_log_table, sd->status.guild_id );
 	StringBuf_Printf(&buf, " ORDER BY `time` DESC LIMIT %u", max);
 
-	SqlStmt* stmt = SqlStmt_Malloc(mmysql_handle);
-	if( SQL_ERROR == SqlStmt_PrepareStr(stmt, StringBuf_Value(&buf)) ||
-		SQL_ERROR == SqlStmt_Execute(stmt) )
+	SqlStmt stmt{ *mmysql_handle };
+	if( SQL_ERROR == stmt.PrepareStr(StringBuf_Value(&buf)) ||
+		SQL_ERROR == stmt.Execute() )
 	{
 		SqlStmt_ShowDebug(stmt);
-		SqlStmt_Free(stmt);
-		StringBuf_Destroy(&buf);
 
 		return GUILDSTORAGE_LOG_FAILED;
 	}
@@ -670,37 +669,35 @@ enum e_guild_storage_log storage_guild_log_read_sub( map_session_data* sd, std::
 	struct guild_log_entry entry;
 
 	// General data
-	SqlStmt_BindColumn(stmt, 0, SQLDT_UINT,      &entry.id,               0, nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 1, SQLDT_STRING,    &entry.time, sizeof(entry.time), nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 2, SQLDT_STRING,    &entry.name, sizeof(entry.name), nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 3, SQLDT_SHORT,     &entry.amount,           0, nullptr, nullptr);
+	stmt.BindColumn(0, SQLDT_UINT32, &entry.id);
+	stmt.BindColumn(1, SQLDT_STRING, &entry.time, sizeof(entry.time));
+	stmt.BindColumn(2, SQLDT_STRING, &entry.name, sizeof(entry.name));
+	stmt.BindColumn(3, SQLDT_INT16, &entry.amount);
 
 	// Item data
-	SqlStmt_BindColumn(stmt, 4, SQLDT_UINT,      &entry.item.nameid,      0, nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 5, SQLDT_CHAR,      &entry.item.identify,    0, nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 6, SQLDT_CHAR,      &entry.item.refine,      0, nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 7, SQLDT_CHAR,      &entry.item.attribute,   0, nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 8, SQLDT_UINT,      &entry.item.expire_time, 0, nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 9, SQLDT_UINT,      &entry.item.bound,       0, nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 10, SQLDT_UINT64,   &entry.item.unique_id,   0, nullptr, nullptr);
-	SqlStmt_BindColumn(stmt, 11, SQLDT_INT8,     &entry.item.enchantgrade,0, nullptr, nullptr);
+	stmt.BindColumn(4, SQLDT_UINT32, &entry.item.nameid);
+	stmt.BindColumn(5, SQLDT_CHAR, &entry.item.identify);
+	stmt.BindColumn(6, SQLDT_CHAR, &entry.item.refine);
+	stmt.BindColumn(7, SQLDT_CHAR, &entry.item.attribute);
+	stmt.BindColumn(8, SQLDT_UINT32, &entry.item.expire_time);
+	stmt.BindColumn(9, SQLDT_UINT32, &entry.item.bound);
+	stmt.BindColumn(10, SQLDT_UINT64, &entry.item.unique_id);
+	stmt.BindColumn(11, SQLDT_INT8, &entry.item.enchantgrade);
 	for( j = 0; j < MAX_SLOTS; ++j )
-		SqlStmt_BindColumn(stmt, 12+j, SQLDT_UINT, &entry.item.card[j], 0, nullptr, nullptr);
+		stmt.BindColumn(12+j, SQLDT_UINT32, &entry.item.card[j]);
 	for( j = 0; j < MAX_ITEM_RDM_OPT; ++j ) {
-		SqlStmt_BindColumn(stmt, 12+MAX_SLOTS+j*3, SQLDT_SHORT, &entry.item.option[j].id, 0, nullptr, nullptr);
-		SqlStmt_BindColumn(stmt, 12+MAX_SLOTS+j*3+1, SQLDT_SHORT, &entry.item.option[j].value, 0, nullptr, nullptr);
-		SqlStmt_BindColumn(stmt, 12+MAX_SLOTS+j*3+2, SQLDT_CHAR, &entry.item.option[j].param, 0, nullptr, nullptr);
+		stmt.BindColumn(12+MAX_SLOTS+j*3, SQLDT_INT16, &entry.item.option[j].id);
+		stmt.BindColumn(12+MAX_SLOTS+j*3+1, SQLDT_INT16, &entry.item.option[j].value);
+		stmt.BindColumn(12+MAX_SLOTS+j*3+2, SQLDT_CHAR, &entry.item.option[j].param);
 	}
 
 	log.reserve(max);
 
-	while( SQL_SUCCESS == SqlStmt_NextRow(stmt) ){
+	while( SQL_SUCCESS == stmt.NextRow() ){
 		log.push_back( entry );
 	}
 
 	Sql_FreeResult(mmysql_handle);
-	StringBuf_Destroy(&buf);
-	SqlStmt_Free(stmt);
 
 	if( log.empty() ){
 		return GUILDSTORAGE_LOG_EMPTY;
@@ -914,7 +911,7 @@ void storage_guild_storageadd(map_session_data* sd, int32 index, int32 amount)
  * @param amount : number of item to get
  * @return 1:success, 0:fail
  */
-void storage_guild_storageget(map_session_data* sd, int32 index, int32 amount)
+void storage_guild_storageget(map_session_data* sd, int32 index, int32 amount, bool favorite)
 {
 	struct s_storage *stor;
 	unsigned char flag = 0;
@@ -939,7 +936,7 @@ void storage_guild_storageget(map_session_data* sd, int32 index, int32 amount)
 		return;
 	}
 
-	if((flag = pc_additem(sd,&stor->u.items_guild[index],amount,LOG_TYPE_GSTORAGE)) == 0)
+	if((flag = pc_additem(sd,&stor->u.items_guild[index],amount,LOG_TYPE_GSTORAGE,favorite)) == 0)
 		storage_guild_delitem(sd,stor,index,amount);
 	else { // inform fail
 		clif_storageitemremoved( *sd, index, 0 );
@@ -989,7 +986,7 @@ void storage_guild_storageaddfromcart(map_session_data* sd, int32 index, int32 a
  */
 void storage_guild_storagegettocart(map_session_data* sd, int32 index, int32 amount)
 {
-	short flag;
+	int16 flag;
 	struct s_storage *stor;
 
 	nullpo_retv(sd);
@@ -1148,7 +1145,7 @@ bool storage_premiumStorage_load(map_session_data *sd, uint8 num, uint8 mode) {
 		return 0;
 
 	if (!pc_can_give_items(sd)) { // check is this GM level is allowed to put items to storage
-		clif_displaymessage(sd->fd, msg_txt(sd,246));
+		clif_displaymessage( sd->fd, msg_txt( sd, 246 ) ); // Your GM level doesn't authorize you to perform this action.
 		return 0;
 	}
 

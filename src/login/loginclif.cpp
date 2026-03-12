@@ -12,7 +12,7 @@
 #include <common/random.hpp>
 #include <common/showmsg.hpp> //show notice
 #include <common/socket.hpp> //wfifo session
-#include <common/strlib.hpp> //safeprint32
+#include <common/strlib.hpp> //safeprint
 #include <common/timer.hpp> //difftick
 #include <common/utils.hpp>
 
@@ -352,7 +352,7 @@ static bool logclif_parse_reqauth_sso( int32 fd, login_session_data& sd ){
 
 	ShowStatus( "Request for connection (SSO mode) of %s (ip: %s)\n", sd.userid, ip );
 	// Shinryo: For the time being, just use token as password.
-	safestrncpy( sd.passwd, p->token, token_length + 1 );
+	safestrncpy( sd.passwd, p->token, std::min( sizeof( sd.passwd ), token_length + 1 ) );
 
 	if( login_config.use_md5_passwds ){
 		MD5_String( sd.passwd, sd.passwd );

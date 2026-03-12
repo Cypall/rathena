@@ -11,28 +11,26 @@
 #include <common/core.hpp> // CORE_ST_LAST
 #include <common/mmo.hpp>
 #include <common/msg_conf.hpp>
+#include <common/packets.hpp>
 #include <common/timer.hpp>
 #include <config/core.hpp>
-
-#include "packets.hpp"
 
 using rathena::server_core::Core;
 using rathena::server_core::e_core_type;
 
-namespace rathena{
-	namespace server_character{
-		class CharacterServer : public Core{
-			protected:
-				bool initialize( int32 argc, char* argv[] ) override;
-				void finalize() override;
-				void handle_shutdown() override;
+namespace rathena::server_character {
+class CharacterServer : public Core {
+	protected:
+		bool initialize( int32 argc, char* argv[] ) override;
+		void finalize() override;
+		void handle_shutdown() override;
 
-			public:
-				CharacterServer() : Core( e_core_type::CHARACTER ){
+	public:
+		CharacterServer() : Core( e_core_type::CHARACTER ){
 
-				}
-		};
-	}
+		}
+};
+
 }
 
 extern int32 login_fd; //login file descriptor
@@ -93,8 +91,10 @@ struct Schema_Config {
 	char quest_db[DB_NAME_LEN];
 	char homunculus_db[DB_NAME_LEN];
 	char skill_homunculus_db[DB_NAME_LEN];
+	char skillcooldown_homunculus_db[DB_NAME_LEN];
 	char mercenary_db[DB_NAME_LEN];
 	char mercenary_owner_db[DB_NAME_LEN];
+	char skillcooldown_mercenary_db[DB_NAME_LEN];
 	char elemental_db[DB_NAME_LEN];
 	char bonus_script_db[DB_NAME_LEN];
 	char acc_reg_num_table[DB_NAME_LEN];
@@ -188,7 +188,7 @@ struct CharServ_Config {
 	int32 char_check_db;	///cheking sql-table at begining ?
 
 	struct s_point_str start_point[MAX_STARTPOINT], start_point_doram[MAX_STARTPOINT]; // Initial position the player will spawn on the server
-	short start_point_count, start_point_count_doram; // Number of positions read
+	int16 start_point_count, start_point_count_doram; // Number of positions read
 	struct startitem start_items[MAX_STARTITEM], start_items_doram[MAX_STARTITEM]; // Initial items the player with spawn with on the server
 	uint32 start_status_points;
 	int32 console;
@@ -240,7 +240,7 @@ struct online_char_data {
 	uint32 char_id;
 	int32 fd;
 	int32 waiting_disconnect;
-	short server; // -2: unknown server, -1: not connected, 0+: id of server
+	int16 server; // -2: unknown server, -1: not connected, 0+: id of server
 	bool pincode_success;
 
 public: 
@@ -302,10 +302,10 @@ void char_disconnect_player(uint32 account_id);
 TIMER_FUNC(char_chardb_waiting_disconnect);
 
 int32 char_mmo_gender(const struct char_session_data *sd, const struct mmo_charstatus *p, char sex);
-int32 char_mmo_char_tobuf(uint8* buffer, struct mmo_charstatus* p);
+int32 char_mmo_char_tobuf( CHARACTER_INFO& info, mmo_charstatus& p );
 int32 char_mmo_char_tosql(uint32 char_id, struct mmo_charstatus* p);
 int32 char_mmo_char_fromsql(uint32 char_id, struct mmo_charstatus* p, bool load_everything);
-int32 char_mmo_chars_fromsql(struct char_session_data* sd, uint8* buf, uint8* count = nullptr);
+int32 char_mmo_chars_fromsql( char_session_data& sd, CHARACTER_INFO chars[], uint8* count = nullptr );
 enum e_char_del_response char_delete(struct char_session_data* sd, uint32 char_id);
 int32 char_rename_char_sql(struct char_session_data *sd, uint32 char_id);
 int32 char_divorce_char_sql(int32 partner_id1, int32 partner_id2);
@@ -321,12 +321,12 @@ int32 char_loadName(uint32 char_id, char* name);
 int32 char_check_char_name(char * name, char * esc_name);
 
 bool char_pincode_decrypt( uint32 userSeed, char* pin );
-int32 char_pincode_compare( int32 fd, struct char_session_data* sd, char* pin );
+int32 char_pincode_compare( int32 fd, char_session_data& sd, char* pin );
 void char_auth_ok(int32 fd, struct char_session_data *sd);
 void char_set_charselect(uint32 account_id);
 void char_read_fame_list(void);
 
-int32 char_make_new_char( struct char_session_data* sd, char* name_, int32 str, int32 agi, int32 vit, int32 int_, int32 dex, int32 luk, int32 slot, int32 hair_color, int32 hair_style, short start_job, int32 sex );
+int32 char_make_new_char( struct char_session_data* sd, char* name_, int32 str, int32 agi, int32 vit, int32 int_, int32 dex, int32 luk, int32 slot, int32 hair_color, int32 hair_style, int16 start_job, int32 sex );
 
 void char_set_session_flag_(int32 account_id, int32 val, bool set);
 #define char_set_session_flag(account_id, val)   ( char_set_session_flag_((account_id), (val), true)  )
